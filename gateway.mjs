@@ -7,13 +7,12 @@ import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
 
 const DIR = "/workspace/uploads";
 const UPLOAD_LIMIT = 10 * 1024 * 1024;
-const REQUIRE_PUBLIC_KEY = process.env.REA_PUBLIC_MODE === "required";
+const REQUIRE_PUBLIC_KEY = true; // Public Render runtime: fail closed even if environment is incomplete.
 const PUBLIC_API_KEY = process.env.REA_PUBLIC_API_KEY || "";
 if (REQUIRE_PUBLIC_KEY && PUBLIC_API_KEY.length < 32) {
   process.stderr.write("[REA] PUBLIC_API_KEY_NOT_CONFIGURED: unauthenticated endpoints disabled\n");
 }
 function isAuthorized(req) {
-  if (!REQUIRE_PUBLIC_KEY) return true; // Cloudflare Worker handles authentication in private-container mode.
   if (PUBLIC_API_KEY.length < 32) return false;
   const header = String(req.headers.authorization || "");
   if (!header.startsWith("Bearer ")) return false;
@@ -76,15 +75,25 @@ async function upload(req, res) {
 }
 createServer(async (req, res) => {
   const path = new URL(req.url || "/", "http://container").pathname;
+  if (path === "/" && req.method === "GET") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" });
+    return res.end('<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>REA Cloud | Lance Marketing Digital</title><style>body{font:16px system-ui;background:#0b0b10;color:#f6f4fa;max-width:760px;margin:12vh auto;padding:24px}main{border:1px solid #393145;border-radius:16px;padding:32px}h1{color:#c4a9ff}p{line-height:1.7}code{color:#93d1cb}</style></head><body><main><h1>REA Cloud</h1><p>Motor de engenharia reversa da Lance Marketing Digital. O servidor MCP está disponível somente para clientes autenticados.</p><p>Rota de integração: <code>/mcp</code></p><p>Acesso administrativo e análises são coordenados pelo RAUL JARVIS.</p></main></body></html>');
+  }
   if (path === "/health" && req.method === "GET") {
     const ok = await isReady();
     return json(res, ok ? 200 : 503, { ok });
   }
   if (REQUIRE_PUBLIC_KEY && !isAuthorized(req)) return json(res, PUBLIC_API_KEY.length < 32 ? 503 : 401, { error: "unauthorized" });
-  if (path === "/artifacts" && req.method === "POST") return upload(req, res);
+  if (path === "/artifacts" && req.method === "POST") {
+    if (process.env.REA_ALLOW_UPLOADS !== "enabled") return json(res, 403, { error: "uploads_disabled_until_workspace_isolation" });
+    return upload(req, res);
+  }
   if (path !== "/mcp") return json(res, 404, { error: "not_found" });
   if (!await isReady()) return json(res, 503, { error: "rea_not_ready" });
   const headers = { ...req.headers, host: "127.0.0.1:8765" };
+  delete headers.cookie;
+  delete headers["cf-access-jwt-assertion"];
+  delete headers["cf-access-authenticated-user-email"];
   delete headers.origin; // Origin and Bearer already checked by Cloudflare Worker.
   delete headers.authorization;
   const upstream = sendHttp({
