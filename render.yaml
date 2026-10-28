@@ -1,0 +1,22 @@
+# LANCE TUDO | REA Cloud MCP | Free tier only
+# This Blueprint never provisions paid databases or disks.
+services:
+  - type: web
+    name: lance-rea-free
+    runtime: docker
+    plan: free
+    region: oregon
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    domains:
+      - rea.lancemktdigital.com.br
+    envVars:
+      - key: REA_PUBLIC_API_KEY
+        generateValue: true
+      - key: REA_MCP_OUTPUT_SCHEMA_PROFILE
+        value: full
+      - key: REA_ALLOW_UPLOADS
+        value: disabled
