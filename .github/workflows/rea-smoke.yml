@@ -1,0 +1,43 @@
+name: REA Runtime Security and MCP Smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: JavaScript syntax check
+        run: |
+          node --check gateway.mjs
+          node --check scripts/mcp-smoke.mjs
+      - name: Build standalone REA image
+        run: docker build --pull -t lance-rea-runtime:test .
+      - name: Start isolated container and validate authentication
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 32)"
+          docker run -d --name rea-smoke --memory=512m --cpus=0.1 -p 127.0.0.1:18081:10000 -e PORT=10000 -e REA_PUBLIC_API_KEY="$token" -e REA_ALLOW_UPLOADS=disabled lance-rea-runtime:test
+          trap 'docker logs --tail 25 rea-smoke || true; docker rm -f rea-smoke || true' EXIT
+          ready=0
+          for i in $(seq 1 150); do
+            if curl -fsS --max-time 3 http://127.0.0.1:18081/health | grep -q '"ok":true'; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = 1
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18081/mcp)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Authorization: Bearer wrong-key' http://127.0.0.1:18081/mcp)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $token" http://127.0.0.1:18081/artifacts)" = 403
+          REA_TEST_API_KEY="$token" node scripts/mcp-smoke.mjs
