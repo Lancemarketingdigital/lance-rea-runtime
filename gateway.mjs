@@ -9,18 +9,22 @@ const DIR = "/workspace/uploads";
 const UPLOAD_LIMIT = 10 * 1024 * 1024;
 const REQUIRE_PUBLIC_KEY = true; // Public Render runtime: fail closed even if environment is incomplete.
 const PUBLIC_API_KEY = process.env.REA_PUBLIC_API_KEY || "";
-if (REQUIRE_PUBLIC_KEY && PUBLIC_API_KEY.length < 32) {
-  process.stderr.write("[REA] PUBLIC_API_KEY_NOT_CONFIGURED: unauthenticated endpoints disabled\n");
+const CONTROL_PLANE_API_KEY = process.env.LANCE_CONTROL_PLANE_REA_KEY || "";
+if (REQUIRE_PUBLIC_KEY && PUBLIC_API_KEY.length < 32 && CONTROL_PLANE_API_KEY.length < 32) {
+  process.stderr.write("[REA] API_KEY_NOT_CONFIGURED: authenticated endpoints disabled\n");
+}
+function keyMatches(supplied, expected) {
+  if (!expected || expected.length < 32) return false;
+  const a = createHash("sha256").update(supplied).digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b);
 }
 function isAuthorized(req) {
-  if (PUBLIC_API_KEY.length < 32) return false;
   const header = String(req.headers.authorization || "");
   if (!header.startsWith("Bearer ")) return false;
   const supplied = header.slice(7);
   if (!supplied || supplied.length > 4096) return false;
-  const a = createHash("sha256").update(supplied).digest();
-  const b = createHash("sha256").update(PUBLIC_API_KEY).digest();
-  return timingSafeEqual(a, b);
+  return keyMatches(supplied, PUBLIC_API_KEY) || keyMatches(supplied, CONTROL_PLANE_API_KEY);
 }
 mkdirSync(DIR, { recursive: true });
 const rea = spawn("rea", ["mcp", "--http", "--host", "127.0.0.1", "--port", "8765"], {
@@ -83,7 +87,7 @@ createServer(async (req, res) => {
     const ok = await isReady();
     return json(res, ok ? 200 : 503, { ok });
   }
-  if (REQUIRE_PUBLIC_KEY && !isAuthorized(req)) return json(res, PUBLIC_API_KEY.length < 32 ? 503 : 401, { error: "unauthorized" });
+  if (REQUIRE_PUBLIC_KEY && !isAuthorized(req)) return json(res, PUBLIC_API_KEY.length < 32 && CONTROL_PLANE_API_KEY.length < 32 ? 503 : 401, { error: "unauthorized" });
   if (path === "/artifacts" && req.method === "POST") {
     if (process.env.REA_ALLOW_UPLOADS !== "enabled") return json(res, 403, { error: "uploads_disabled_until_workspace_isolation" });
     return upload(req, res);
